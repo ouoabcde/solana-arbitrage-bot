@@ -63,7 +63,7 @@ const jupiterArbitrage = async () => {
             outTokenMint,
             swapInAmount,
             false, // dynamicSlippage
-            30, // 10 bps = 0.1%
+            200, // 10 bps = 0.1%
         );
         if (!inToOutTokenSwapQuoteRes) continue;
         const outToInTokenSwapQuoteRes = await getJupiterSwapQuote(
@@ -71,7 +71,7 @@ const jupiterArbitrage = async () => {
             inTokenMint,
             new Decimal(inToOutTokenSwapQuoteRes.outAmount),
             false, // dynamicSlippage
-            30, // 10 bps = 0.1%
+            200, // 10 bps = 0.1%
         );
         if (!outToInTokenSwapQuoteRes) continue;
 
@@ -125,24 +125,30 @@ const jupiterArbitrage = async () => {
     for (const swapQuoteRes of maxProfitSwapQuoteResList) {
         // await buildSwapJupiterTx(swapQuoteRes, wallet.publicKey);
 
-        swapInstructionResults.push(await buildSwapJupiterInstructions(swapQuoteRes, wallet.publicKey, false, 30));
+        swapInstructionResults.push(await buildSwapJupiterInstructions(swapQuoteRes, wallet.publicKey, false, 200));
     }
-
-    const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
 
     const lookupTableAccountsNested = await Promise.all(
         swapInstructionResults.map(swapInstructionResult => getAddressLookupTableAccounts(swapInstructionResult.addressLookupTableAddresses))
     );
-    const lookupTableAccounts = lookupTableAccountsNested.flat();
 
-    addressLookupTableAccounts.push(...lookupTableAccounts);
+    const addressLookupTableAccountMap = new Map<string, AddressLookupTableAccount>();
+    for (const alt of lookupTableAccountsNested.flat()) {
+        const keyStr = alt.key.toBase58();
+        if (!addressLookupTableAccountMap.has(keyStr)) {
+            addressLookupTableAccountMap.set(keyStr, alt);
+        }
+    }
+
+    const addressLookupTableAccounts = Array.from(addressLookupTableAccountMap.values());
 
     const { blockhash } = await connection.getLatestBlockhash();
     const messageV0 = new TransactionMessage({
         payerKey: wallet.publicKey,
         recentBlockhash: blockhash,
         instructions: [
-            ...(swapInstructionResults.map(swapInstructionResult => deserializeInstruction(swapInstructionResult.swapInstructionPayload))),
+            ...(swapInstructionResults.map(res => res.setupInstructions.map((setupIx: any) => deserializeInstruction(setupIx)))).flat(),
+            ...(swapInstructionResults.map(res => deserializeInstruction(res.swapInstructionPayload))),
         ],
     }).compileToV0Message(addressLookupTableAccounts);
     const transaction = new VersionedTransaction(messageV0);
@@ -158,6 +164,7 @@ const jupiterArbitrage = async () => {
         // do swap -> send tx
         transaction.sign([wallet]);
         const transactionBinary = transaction.serialize();
+        console.log(`serialized transaction size: ${transactionBinary.length}`); // should be less than 1232 bytes -> if it doesn't, then it would fail
 
         const txHash = await connection.sendRawTransaction(transactionBinary, {
             maxRetries: 2,
