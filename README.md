@@ -9,10 +9,10 @@ $ pnpm install
 
 ## 2. Two kinds of bots
 1. `/src/jupiterArbitrage.ts`
-- This is the bot which tries to find arbitrage opportunity between two tokens with Jupiter SWAP API.
+- This is the bot which tries to find <i>BEST</i> arbitrage opportunity between two tokens with Jupiter SWAP API.
 - This bot tries to swap input token -> output token -> back to input token, so tries to earn revenue with input token.
 - Example two tokens are wfragSOL and JitoSOL.
-- Used Jupiter SWAP API is Free Plan right now, so it would meet rate limit error often.
+- Using Jupiter SWAP API is Free Plan right now, so it would meet rate limit error often.
 
 2. `/src/orcaMeteoraArbitrage.ts`
 - This bot tries to find arbitrage opportunity between Orca and Meteora pools.
