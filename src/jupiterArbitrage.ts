@@ -19,9 +19,6 @@ const jitoSolAddr = new web3.PublicKey("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7k
 // constants
 const DECIMALS = 10**9;
 
-const threshold = new Decimal(0.1);
-const swapSlippage = 0.1;
-
 const wallet = web3.Keypair.fromSecretKey(Uint8Array.from(bs58.decode(process.env.WALLET_PRIVATE_KEY!)));
 
 // fragmetric
@@ -50,29 +47,31 @@ const jupiterArbitrage = async () => {
 
     // find appropriate swapInAmount for arbitrage
     // jupiter swap api
-    let swapQuoteResList: any[] = [];
-    let bestArbSwapAmount = new Decimal(0);
+
+    let maxProfit = new Decimal(0);
+    let maxProfitSwapAmount = new Decimal(0);
+    let maxProfitSwapQuoteResList: any[] = [];
 
     let low = new Decimal(0);
     let high = walletInputTokenBalance;
     let swapInAmount = walletInputTokenBalance;
     let breakThreshold = new Decimal(0.00001 * DECIMALS); // tx fee * 2
 
-    let justBeforeAvailableSwapInAmount = new Decimal(0);
-    let possibleHighLimit = walletInputTokenBalance;
     while (true) {
         const inToOutTokenSwapQuoteRes = await getJupiterSwapQuote(
             inTokenMint,
             outTokenMint,
             swapInAmount,
-            10, // 10 bps = 0.1%
+            false, // dynamicSlippage
+            30, // 10 bps = 0.1%
         );
         if (!inToOutTokenSwapQuoteRes) continue;
         const outToInTokenSwapQuoteRes = await getJupiterSwapQuote(
             outTokenMint,
             inTokenMint,
             new Decimal(inToOutTokenSwapQuoteRes.outAmount),
-            10, // 10 bps = 0.1%
+            false, // dynamicSlippage
+            30, // 10 bps = 0.1%
         );
         if (!outToInTokenSwapQuoteRes) continue;
 
@@ -80,8 +79,13 @@ const jupiterArbitrage = async () => {
         const returned = new Decimal(outToInTokenSwapQuoteRes.outAmount);
 
         if (returned.greaterThan(input)) { // then it's arbitragey opportunity -> need swap
-            bestArbSwapAmount = swapInAmount;
-            swapQuoteResList = [inToOutTokenSwapQuoteRes, outToInTokenSwapQuoteRes];
+            const profit = returned.sub(input);
+
+            if (profit.greaterThan(maxProfit)) {
+                maxProfit = profit;
+                maxProfitSwapAmount = swapInAmount;
+                maxProfitSwapQuoteResList = [inToOutTokenSwapQuoteRes, outToInTokenSwapQuoteRes];
+            }
 
             // 더 나은 기회 탐색
             low = swapInAmount;
@@ -96,93 +100,35 @@ const jupiterArbitrage = async () => {
         }
 
         if (high.sub(low).lessThan(breakThreshold)) {
-            console.log(`Found arbitrage opportunity with swapInAmount = ${bestArbSwapAmount.toString()}`);
+            console.log(`Found arbitrage opportunity with swapInAmount = ${maxProfitSwapAmount.toString()}`);
             break;
         }
-
-        // if (new Decimal(inToOutTokenSwapQuoteRes.inAmount)
-        //     .lessThan(new Decimal(outToInTokenSwapQuoteRes.outAmount))) // then it's arbitragey opportunity -> need swap
-        // {
-        //     if (justBeforeAvailableSwapInAmount.equals(0)) {
-        //         swapQuoteResList = [inToOutTokenSwapQuoteRes, outToInTokenSwapQuoteRes];
-        //         // break; // 한 번만에 성공이므로 break
-        //         justBeforeAvailableSwapInAmount = swapInAmount;
-        //         swapInAmount = swapInAmount.add(
-        //             (possibleHighLimit.sub(swapInAmount)).div(2).floor()
-        //         );
-        //         continue;
-        //     }
-        //     if (!justBeforeAvailableSwapInAmount.equals(swapInAmount)) {
-        //         if (justBeforeAvailableSwapInAmount.equals(0)) {
-        //             swapQuoteResList = [inToOutTokenSwapQuoteRes, outToInTokenSwapQuoteRes];
-        //             justBeforeAvailableSwapInAmount = swapInAmount; // set first pivot
-        //             swapInAmount = swapInAmount.add(
-        //                 (possibleHighLimit.sub(swapInAmount)).div(2).floor()
-        //             );
-        //             continue;
-        //         } else {
-        //             let tmpSwapInAmount = swapInAmount;
-        //             let tmpJustBeforeAvailableSwapInAmount = justBeforeAvailableSwapInAmount;
-
-        //             swapQuoteResList = [inToOutTokenSwapQuoteRes, outToInTokenSwapQuoteRes];
-
-        //             justBeforeAvailableSwapInAmount = swapInAmount;
-        //             swapInAmount = swapInAmount.add(
-        //                 (possibleHighLimit.sub(swapInAmount)).div(2).floor()
-        //             );
-        //             // if (swapInAmount.greaterThan(walletInputTokenBalance)) {
-        //             //     swapInAmount = tmpSwapInAmount;
-        //             //     break;
-        //             // }
-        //             continue;
-        //         }
-        //     }
-        //     if (justBeforeAvailableSwapInAmount.equals(swapInAmount)) {
-        //         break;
-        //     }
-        // } else {
-        //     if (!justBeforeAvailableSwapInAmount.equals(0)) {
-        //         // 이미 swap 기회가 있었던 것!
-        //         possibleHighLimit = swapInAmount;
-        //     }
-        //     swapInAmount = swapInAmount.sub(
-        //         (possibleHighLimit.sub(justBeforeAvailableSwapInAmount)).div(2).floor()
-        //     );
-        //     console.log(`semi swapInAmount: ${swapInAmount}`);
-        //     if (swapInAmount.sub(justBeforeAvailableSwapInAmount).lessThan(0.05 * DECIMALS)) {
-        //         console.log(`swap quote calc result: swapInAmount ${swapInAmount}, justBeforeAvailableSwapInAmount ${justBeforeAvailableSwapInAmount}, swapQuoteResList:`, swapQuoteResList);
-        //         break; // let's done this
-        //     }
-        // }
     }
 
-    if (bestArbSwapAmount.equals(0) || swapQuoteResList.length !== 2) {
+    if (maxProfitSwapAmount.equals(0) || maxProfitSwapQuoteResList.length !== 2) {
         console.log("No arbitrage opportunity found in current range.");
         return; // 또는 에러 throw, fallback 처리
     }
 
     // do swap with calculated optimal swapInAmount
-    console.log(`calculated optimal swapInAmount: ${bestArbSwapAmount}`);
+    console.log(`calculated optimal swapInAmount: ${maxProfitSwapAmount}`);
 
-    const estimatedProfitAsInputToken = new Decimal(swapQuoteResList[1].outAmount).sub(bestArbSwapAmount);
+    const estimatedProfitAsInputToken = new Decimal(maxProfitSwapQuoteResList[1].outAmount).sub(maxProfitSwapAmount);
     console.log(`estimated profit (JitoSOL): ${estimatedProfitAsInputToken}`);
+    console.log(`calculated max profit (JitoSOL): ${maxProfit}`);
 
     const inTokenAsSolValue = fragSOLFund?.supportedAssets.filter(asset => asset.mint == inTokenMint.toString())[0].oneTokenAsSol;
     const estimatedProfitAsSol = estimatedProfitAsInputToken.mul(inTokenAsSolValue!.toString()).div(DECIMALS).floor();
     console.log(`estimated profit (SOL): ${estimatedProfitAsSol}`);
 
     let swapInstructionResults = [];
-    for (const swapQuoteRes of swapQuoteResList) {
+    for (const swapQuoteRes of maxProfitSwapQuoteResList) {
         // await buildSwapJupiterTx(swapQuoteRes, wallet.publicKey);
 
-        swapInstructionResults.push(await buildSwapJupiterInstructions(swapQuoteRes, wallet.publicKey));
+        swapInstructionResults.push(await buildSwapJupiterInstructions(swapQuoteRes, wallet.publicKey, false, 30));
     }
 
     const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
-
-    // addressLookupTableAccounts.push(
-    //     ...(await getAddressLookupTableAccounts(addressLookupTableAddresses)),
-    // );
 
     const lookupTableAccountsNested = await Promise.all(
         swapInstructionResults.map(swapInstructionResult => getAddressLookupTableAccounts(swapInstructionResult.addressLookupTableAddresses))
@@ -191,17 +137,15 @@ const jupiterArbitrage = async () => {
 
     addressLookupTableAccounts.push(...lookupTableAccounts);
 
-    const { blockhash, lastValidBlockHeight} = await connection.getLatestBlockhash();
+    const { blockhash } = await connection.getLatestBlockhash();
     const messageV0 = new TransactionMessage({
         payerKey: wallet.publicKey,
         recentBlockhash: blockhash,
         instructions: [
-            // deserializeInstruction(swapInstructionPayload),
             ...(swapInstructionResults.map(swapInstructionResult => deserializeInstruction(swapInstructionResult.swapInstructionPayload))),
         ],
     }).compileToV0Message(addressLookupTableAccounts);
     const transaction = new VersionedTransaction(messageV0);
-    console.log(`one swap tx:`, transaction);
 
     // calculate transaction fee
     const txFeeCalculator = await connection.getFeeForMessage(messageV0);
@@ -213,12 +157,11 @@ const jupiterArbitrage = async () => {
     if (estimatedProfitAsSol.greaterThan(txFee)) {
         // do swap -> send tx
         transaction.sign([wallet]);
-        console.log(`signed transaction:`, transaction);
         const transactionBinary = transaction.serialize();
 
         const txHash = await connection.sendRawTransaction(transactionBinary, {
             maxRetries: 2,
-            skipPreflight: true,
+            skipPreflight: false,
         });
 
         // confirm tx
@@ -238,15 +181,6 @@ const getWalletTokenBalance = async (connection: web3.Connection, wallet: web3.P
     return new Decimal(tokenBalance.value.amount);
 }
 
-const getPriceDeviation = (priceA: Decimal, priceB: Decimal) => {
-    // deviation = abs(priceA - priceB) / avg(priceA, priceB)
-    const deviation = Decimal.abs(priceA.sub(priceB))
-        .div(
-            (priceA.add(priceB)).div(new Decimal(2))
-        );
-    return deviation;
-}
-
 const getJupiterUltraSwapOrder = async (inTokenMint: web3.PublicKey, outTokenMint: web3.PublicKey, swapInAmount: Decimal, recipient: web3.PublicKey, referralAccount?: web3.PublicKey, referralFee?: Decimal) => {
     let uri = `${process.env.JUPITER_ULTRA_API_BASE_ENDPOINT}?inputMint=${jitoSolAddr.toString()}&outputMint=${wfragSolAddr.toString()}&amount=${swapInAmount.toString()}&taker=${recipient.toString()}`;
     if (referralAccount) {
@@ -257,14 +191,19 @@ const getJupiterUltraSwapOrder = async (inTokenMint: web3.PublicKey, outTokenMin
     }
 
     const swapOrderRes = await (await fetch(uri)).json();
-    console.log(swapOrderRes);
-    console.log(`routePlan:`, swapOrderRes?.routePlan);
+    console.log(JSON.stringify(swapOrderRes, null, 2));
 
     return swapOrderRes;
 }
 
-const getJupiterSwapQuote = async (inTokenMint: web3.PublicKey, outTokenMint: web3.PublicKey, swapInAmount: Decimal, slippageBps: number) => {
-    let uri = `${process.env.JUPITER_SWAP_API_BASE_ENDPOINT}quote?inputMint=${inTokenMint.toString()}&outputMint=${outTokenMint.toString()}&amount=${swapInAmount.toString()}&slippageBps=${slippageBps}&restrictIntermediateTokens=true`;
+const getJupiterSwapQuote = async (inTokenMint: web3.PublicKey, outTokenMint: web3.PublicKey, swapInAmount: Decimal, dynamicSlippage: boolean, slippageBps: number = 10) => {
+    let uri = `${process.env.JUPITER_SWAP_API_BASE_ENDPOINT}quote?inputMint=${inTokenMint.toString()}&outputMint=${outTokenMint.toString()}&amount=${swapInAmount.toString()}&restrictIntermediateTokens=true`;
+
+    if (dynamicSlippage) {
+        uri += `&dynamicSlippage=${dynamicSlippage}`;
+    } else {
+        uri += `&slippageBps=${slippageBps}`;
+    }
 
     const swapQuoteRes = await (await fetch(uri)).json();
     console.log(`swap quote response:`, JSON.stringify(swapQuoteRes, null, 2));
@@ -297,7 +236,7 @@ const buildSwapJupiterTx = async (quoteResponse: any, wallet: web3.PublicKey) =>
     console.log(`swap response:`, JSON.stringify(swapRes, null, 2));
 }
 
-const buildSwapJupiterInstructions = async (quoteResponse: any, wallet: web3.PublicKey) => {
+const buildSwapJupiterInstructions = async (quoteResponse: any, wallet: web3.PublicKey, dynamicSlippage: boolean, slippageBps: number = 10) => {
     const uri = `${process.env.JUPITER_SWAP_API_BASE_ENDPOINT}swap-instructions`;
 
     const instructions = await (await fetch(uri, {
@@ -309,8 +248,8 @@ const buildSwapJupiterInstructions = async (quoteResponse: any, wallet: web3.Pub
             quoteResponse,
             userPublicKey: wallet.toString(),
             dynamicComputeUnitLimit: true,
-            // dynamicSlippage: true,
-            slipageBps: 10, // 10 bps = 0.1%
+            dynamicSlippage,
+            slippageBps, // 10 bps = 0.1%
             prioritizationFeeLamports: {
                 priorityLevelWithMaxLamports: {
                     maxLamports: 1_000_000,
