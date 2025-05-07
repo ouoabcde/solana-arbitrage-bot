@@ -25,7 +25,7 @@ const swapSlippage = 0.1;
 // const walletSecretKey = fs.readFileSync(path.join(__dirname, "../wallet-keypair.json"), "utf8").trim();
 const wallet = web3.Keypair.fromSecretKey(Uint8Array.from(bs58.decode(process.env.WALLET_PRIVATE_KEY!)));
 
-const arbitrageOpportunityCalculator = async () => {
+const orcaMeteoraArbitrage = async () => {
     const walletWfragSolTokenBalance = await getWalletTokenBalance(connection, wallet.publicKey, wfragSolAddr);
     const walletJitoSolTokenTotalBalance = await getWalletTokenBalance(connection, wallet.publicKey, jitoSolAddr);
 
@@ -133,4 +133,4 @@ const meteoraFirstOrcaBehind = async (connection: web3.Connection, firstInTokenM
     }
 }
 
-arbitrageOpportunityCalculator();
+orcaMeteoraArbitrage();
